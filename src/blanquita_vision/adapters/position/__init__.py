@@ -1,0 +1,1 @@
+"""Estimación de coordenadas físicas."""

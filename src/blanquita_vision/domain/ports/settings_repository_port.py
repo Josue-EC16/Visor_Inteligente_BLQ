@@ -1,0 +1,6 @@
+from typing import Protocol
+
+
+class SettingsRepositoryPort(Protocol):
+    def load_settings(self) -> dict: ...
+    def save_settings(self, settings: dict) -> None: ...

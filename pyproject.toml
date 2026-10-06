@@ -1,0 +1,27 @@
+[project]
+name = "blanquita-vision"
+version = "0.1.0"
+description = "Consola desktop de percepción visual BLANQUITA"
+requires-python = "==3.13.16"
+dependencies = [
+    "PySide6==6.11.2",
+    "pyqtgraph==0.14.0",
+    "numpy==2.5.3",
+    "opencv-contrib-python-headless==4.14.0.94",
+    "pydantic==2.13.5",
+    "websockets==17.1",
+]
+
+[dependency-groups]
+dev = ["pytest==9.1.1"]
+
+[tool.uv]
+package = false
+required-version = "==0.12.22"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+    "hardware: requiere cámara física y ejecución explícita",
+]

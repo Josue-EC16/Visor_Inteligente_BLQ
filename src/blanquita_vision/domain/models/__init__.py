@@ -1,0 +1,1 @@
+"""Modelos base de captura."""

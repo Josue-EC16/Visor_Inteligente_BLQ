@@ -1,0 +1,9 @@
+from typing import Protocol
+
+from ..models.protocol import ProtocolEnvelope
+
+
+class ReportPublisherPort(Protocol):
+    def publish_report(self, report: ProtocolEnvelope, context: dict | None = None) -> bool: ...
+    def publish_status(self, status: ProtocolEnvelope) -> None: ...
+    def publish_error(self, error: ProtocolEnvelope) -> None: ...
