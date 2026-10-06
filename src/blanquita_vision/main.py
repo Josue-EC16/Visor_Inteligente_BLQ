@@ -23,6 +23,7 @@ from blanquita_vision.application.latest_frame_store import LatestFrameStore
 from blanquita_vision.application.vision_pipeline_controller import VisionPipelineController
 from blanquita_vision.application.operations_service import OperationsService
 from blanquita_vision.adapters.network.websocket_vision_server import WebSocketVisionServer
+from blanquita_vision.adapters.network.udp_discovery_responder import UdpDiscoveryResponder
 from blanquita_vision.adapters.system_diagnostics_provider import SystemDiagnosticsProvider
 from blanquita_vision.infrastructure.config import AppConfig
 from blanquita_vision.infrastructure.logging import configure_logging
@@ -33,6 +34,7 @@ from blanquita_vision.presentation.workers.vision_worker import QtVisionRunner
 from blanquita_vision.presentation.workers.storage_worker import QtStorageController
 from blanquita_vision.presentation.workers.network_worker import QtNetworkController
 from blanquita_vision.presentation.workers.operations_controller import QtOperationsController
+from blanquita_vision.presentation.workers.discovery_worker import QtDiscoveryController
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -65,8 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     vision_runner = QtVisionRunner(store, OpenCvHookDetector, CsrtTracker, HomographyPositionEstimator)
     vision = VisionPipelineController(controller, vision_runner, calibration)
     network = QtNetworkController(WebSocketVisionServer())
+    discovery = QtDiscoveryController(UdpDiscoveryResponder(network.server.health))
     service = OperationsService(controller, vision, calibration, storage, network, repository,
-                                SystemDiagnosticsProvider().snapshot())
+                                SystemDiagnosticsProvider().snapshot(), discovery=discovery)
     operations = QtOperationsController(service)
     window = MainWindow(controller, runner, config.shutdown_timeout_ms, vision, calibration, operations)
     operations.start()

@@ -108,19 +108,29 @@ def operational_setup(vision_setup, wait_until, tmp_path):
     from blanquita_vision.presentation.workers.storage_worker import QtStorageController
     resources = []
 
-    def create(data_root=None, repository_factory=SQLiteVisionRepository, expect_storage="READY"):
+    def create(data_root=None, repository_factory=SQLiteVisionRepository, expect_storage="READY",
+               with_discovery=False, discovery_port=0, discovery_socket_factory=None):
         device, camera, runner, vision, calibration, detector, tracker = vision_setup()
         root = data_root or tmp_path / str(len(resources))
         storage = QtStorageController(root, repository_factory=repository_factory)
         repo = SQLiteCalibrationRepository(storage)
         calibration.repository = repo
         network = QtNetworkController(WebSocketVisionServer("127.0.0.1", 0))
+        discovery = None
+        if with_discovery:
+            from blanquita_vision.adapters.network.udp_discovery_responder import UdpDiscoveryResponder
+            from blanquita_vision.presentation.workers.discovery_worker import QtDiscoveryController
+            options = {"socket_factory": discovery_socket_factory} if discovery_socket_factory is not None else {}
+            discovery = QtDiscoveryController(UdpDiscoveryResponder(network.server.health, "127.0.0.1", discovery_port, **options))
         service = OperationsService(camera, vision, calibration, storage, network, repo,
-                                    SystemDiagnosticsProvider().snapshot())
+                                    SystemDiagnosticsProvider().snapshot(), discovery=discovery)
         operations = QtOperationsController(service)
         resources.append((operations, camera, runner, vision))
         operations.start()
         wait_until(lambda: storage.health["state"] == expect_storage and network.server.health()["state"] == "LISTENING")
+        if discovery is not None:
+            from blanquita_vision.domain.models.discovery import DiscoveryServiceState
+            wait_until(lambda: discovery.snapshot().state in (DiscoveryServiceState.LISTENING, DiscoveryServiceState.ERROR))
         return device, camera, runner, vision, calibration, operations
 
     yield create
@@ -128,7 +138,8 @@ def operational_setup(vision_setup, wait_until, tmp_path):
         operations.shutdown()
         vision.stop()
         camera.disconnect()
-        wait_until(lambda: not runner.active and not vision.runner.active and not operations.service.network.active)
+        wait_until(lambda: not runner.active and not vision.runner.active and not operations.service.network.active
+                   and (operations.service.discovery is None or not operations.service.discovery.active))
         operations.finish_storage()
         wait_until(lambda: not operations.active, timeout=10)
         operations.dispose()

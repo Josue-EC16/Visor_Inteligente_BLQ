@@ -48,6 +48,8 @@ class MainWindow(QMainWindow):
             self.live.set_operations(operations)
             operations.service.storage.idle.connect(self._on_idle)
             operations.service.network.idle.connect(self._on_idle)
+            if operations.service.discovery is not None:
+                operations.service.discovery.idle.connect(self._on_idle)
         if vision is not None:
             self.live.set_vision(vision)
             vision.runner.idle.connect(self._on_idle)
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
             logger.error("camera_shutdown_timeout")
             component = ("el driver de cámara sigue bloqueado" if self.runner.active else
                          "la operación de visión/calibración sigue activa" if self.calibration_screen.busy or self.vision and self.vision.runner.active else
-                         "la operación de red/storage sigue activa")
+                         "la operación de red/storage/discovery sigue activa")
             self.statusBar().showMessage(f"No se pudo completar el cierre: {component}. "
                                         "La ventana permanecerá abierta hasta que termine la operación.")
 

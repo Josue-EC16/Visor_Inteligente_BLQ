@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import datetime
 
 from PySide6.QtCore import QTimer
@@ -58,6 +59,15 @@ class DiagnosticsScreen(QWidget):
                         pass
                 parent.addChild(QTreeWidgetItem([key, "No disponible" if value is None else str(value)]))
             parent.setExpanded(True)
+            if group == "NETWORK" and service.discovery is not None:
+                discovery = service.discovery.snapshot()
+                child = QTreeWidgetItem(["UDP DISCOVERY", discovery.state.value])
+                parent.addChild(child)
+                for key, value in asdict(discovery).items():
+                    if key == "state":
+                        continue
+                    child.addChild(QTreeWidgetItem([key, "No disponible" if value is None else str(value)]))
+                child.setExpanded(True)
 
     def dispose(self) -> None:
         if hasattr(self, "timer"):

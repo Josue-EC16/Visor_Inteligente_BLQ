@@ -7,7 +7,7 @@
 | SPEC ID | SPEC-02 |
 | Nombre | Protocolo, WebSocket, persistencia, analítica, reportes y diagnósticos |
 | Archivo oficial | `SPEC-02_PROTOCOL_WEBSOCKET_STORAGE_ANALYTICS_DIAGNOSTICS.md` |
-| Versión | 1.0.0 |
+| Versión | 1.1.0 |
 | Estado | IMPLEMENTED |
 | Proyecto | BLANQUITA Vision |
 | Plataforma | Windows 10 / Windows 11 x64 |
@@ -16,6 +16,8 @@
 | Estado requerido SPEC-00 | VALIDATED |
 | Estado aceptado SPEC-01 | APPROVED + implementación funcional validada en software |
 | Spec relacionada siguiente | SPEC-03 |
+
+La revisión 1.1.0 incorpora UDP Discovery por solicitud y confirmación explícitas del usuario. Su estado IMPLEMENTED expresa la entrega de la ampliación y su verificación en software, registrada en 28.5. La evidencia de la revisión 1.0.0 se conserva como registro histórico; la interoperabilidad UDP con Mobile/LAN reales permanece pendiente.
 
 ### 1.1. Fuentes normativas
 
@@ -99,6 +101,28 @@ presentación UI = zona horaria local del sistema
 
 No se almacenarán timestamps ingenuos sin zona para datos operativos de SPEC-02.
 
+### 1.6. Autorización de UDP Discovery y alcance del protocolo
+
+El usuario autoriza añadir a esta SPEC el descubrimiento UDP de la laptop en la LAN. BLANQUITA Mobile ya dispone del cliente de discovery; BLANQUITA Vision será únicamente el respondedor.
+
+Contrato confirmado por el usuario:
+
+| Elemento | Valor |
+|---|---|
+| Transporte de descubrimiento | UDP IPv4 |
+| Bind del respondedor | `0.0.0.0:4211` |
+| Solicitud exacta | `BLANQUITA_VISION_DISCOVER` |
+| Respuesta exacta | `BLANQUITA_VISION_HERE:8765` |
+| Codificación | UTF-8, sin BOM, saltos de línea, terminador nulo ni caracteres adicionales |
+| Destino de respuesta | Unicast a la IP y puerto de origen de la solicitud |
+| Condición para responder | WebSocket en LISTENING o CLIENT_CONNECTED |
+| Obtención de IP por Mobile | Dirección origen de la respuesta UDP |
+| Conexión posterior | `ws://IP_LAPTOP:8765/vision` |
+
+UDP solo descubre la dirección del endpoint; WebSocket sigue siendo el canal operativo, principal y persistente. Las reglas de envelope JSON, UUID, Pydantic y campos temporales se aplican a los mensajes operativos WebSocket, no a estos dos datagramas literales. Los timestamps locales de logs/diagnósticos de discovery sí respetan la política UTC existente cuando se registren.
+
+Esta ampliación adelanta a SPEC-02 el descubrimiento automático que los documentos base mencionaban como evolución futura; no cambia su separación de responsabilidades ni sustituye WebSocket. La actualización queda contenida en este archivo, sin modificar otros documentos o SPECS.
+
 ---
 
 ## 2. Contexto
@@ -143,6 +167,29 @@ BLANQUITA Vision continúa siendo únicamente una fuente de percepción.
 
 BLANQUITA Mobile continúa siendo la única autoridad de decisión de alto nivel.
 
+### 2.1. Arquitectura de conexión y descubrimiento
+
+```text
+BLANQUITA MOBILE                         LAPTOP / BLANQUITA VISION
+   │                                              │
+   ├── solicitud UDP a puerto 4211 ────────────────>│ Discovery Worker
+   │   BLANQUITA_VISION_DISCOVER                   │
+   │                                              │ consultar disponibilidad WS
+   │<── respuesta UDP unicast ─────────────────────┤
+   │    BLANQUITA_VISION_HERE:8765                 │
+   │                                              │
+   ├── extrae IP de origen de la respuesta         │
+   │                                              │
+   └── ws://IP_LAPTOP:8765/vision ─────────────────>│ Network Worker
+       conexión WebSocket persistente             │ hello/ready/status/report/heartbeat
+```
+
+El móvil puede enviar discovery mediante broadcast de su red o directamente a una dirección conocida: la laptop valida la solicitud recibida en UDP 4211 y responde siempre unicast al origen. Esta SPEC no modifica las direcciones de búsqueda, temporizadores ni selección de resultados del cliente Mobile existente.
+
+La respuesta no incluye una IP en el cuerpo: Mobile utiliza la dirección origen del datagrama recibido. `8765` anuncia el puerto WebSocket, no el puerto UDP. La dirección de bind `0.0.0.0` no es la dirección que Mobile debe usar para conectarse.
+
+Recibir HERE no establece una conexión WebSocket, no reserva el cliente único y no significa que la cámara, detector o calibración estén operativos. La disponibilidad y estados de visión se obtienen posteriormente por WebSocket.
+
 ---
 
 ## 3. Objetivo
@@ -166,6 +213,8 @@ Implementar la capa de comunicación, persistencia y observabilidad de BLANQUITA
 15. conservar UI responsiva mediante Network Worker y Storage Worker;
 16. funcionar sin Internet;
 17. mantener separación estricta respecto del control físico.
+18. responder solicitudes UDP de discovery para localizar la laptop automáticamente;
+19. conservar arranque, operación y fallos independientes entre discovery y WebSocket.
 
 ---
 
@@ -173,7 +222,7 @@ Implementar la capa de comunicación, persistencia y observabilidad de BLANQUITA
 
 ### 4.1. IN SCOPE
 
-#### Protocolo
+#### Protocolo operativo WebSocket
 
 - JSON versionado.
 - `protocol = "blanquita-vision"`.
@@ -211,6 +260,19 @@ Implementar la capa de comunicación, persistencia y observabilidad de BLANQUITA
 - sin autenticación en V1.
 - LAN privada.
 - latest-only para reportes salientes pendientes.
+
+#### UDP Discovery
+
+- Respondedor laptop mediante UDP IPv4 en `0.0.0.0:4211`.
+- Solicitud/respuesta UTF-8 exactas de la sección 1.6, sin envelope JSON.
+- Respuesta unicast a la IP y puerto de origen; puerto origen del respondedor 4211.
+- Arranque automático auxiliar, independiente del resultado del arranque WebSocket.
+- Responder solamente si WebSocket está LISTENING o CLIENT_CONNECTED, incluso sin cámara o detector activos.
+- Sin respuestas de discovery cuando WebSocket no esté disponible; UDP puede permanecer LISTENING.
+- Discovery Worker con lifecycle, diagnóstico y errores propios.
+- Sin anuncios espontáneos ni datos continuos; respuesta solo a una solicitud válida.
+- Validación de datagrama completo, sin aceptar prefijos de mensajes truncados.
+- Pruebas de contrato, independencia de fallos, concurrencia y descubrimiento seguido de WebSocket.
 
 #### VisionReport
 
@@ -307,7 +369,7 @@ Implementar la capa de comunicación, persistencia y observabilidad de BLANQUITA
 - autenticación/token.
 - Internet/cloud.
 - MQTT.
-- múltiples clientes simultáneos.
+- múltiples clientes WebSocket simultáneos.
 - transmisión de video al móvil.
 - grabación continua.
 - captura automática por cada detección.
@@ -316,6 +378,10 @@ Implementar la capa de comunicación, persistencia y observabilidad de BLANQUITA
 - control directo de ESP32.
 - comandos de motor.
 - modificación de HSV/CSRT/homografía/EMA aprobados en SPEC-01.
+- transmisión de VisionReport, estados, errores de protocolo, heartbeat o comandos operativos mediante UDP;
+- suscripciones, sesiones o reserva de cliente WebSocket mediante discovery;
+- anuncios UDP espontáneos, discovery por Internet, mDNS u otros protocolos de descubrimiento;
+- implementación o modificación del cliente UDP Mobile, ya existente.
 
 ---
 
@@ -328,6 +394,8 @@ Puede consultar y operar funciones locales de visión, analítica, reportes, cap
 ### 5.2. BLANQUITA Mobile
 
 Cliente WebSocket remoto.
+
+Además, es el cliente de UDP Discovery existente: envía la solicitud, recibe la respuesta, extrae la IP origen y posteriormente abre el WebSocket. El tráfico UDP no lo convierte en cliente WebSocket activo.
 
 Puede:
 
@@ -364,6 +432,10 @@ Almacén local estructurado.
 
 Almacén de capturas físicas.
 
+### 5.8. Discovery Worker / UdpDiscoveryResponder
+
+Servicio auxiliar de la laptop. Posee el socket UDP, valida solicitudes y responde el endpoint disponible. Consulta un snapshot de disponibilidad WebSocket sin ejecutar casos de uso de visión ni acceder directamente a cámara, UI o storage.
+
 ---
 
 ## 6. Casos de uso
@@ -385,11 +457,15 @@ Almacén de capturas físicas.
 5. Pasar a LISTENING.
 6. Exponer estado a UI/Diagnósticos.
 
+El arranque no espera al respondedor UDP ni comprueba que UDP 4211 esté libre. La ausencia/falla de discovery no modifica este flujo.
+
 **Errores:** puerto ocupado, fallo de socket, configuración inválida.
 
 ### UC-02-02 — Conectar Mobile
 
 **Precondición:** LISTENING y sin cliente activo.
+
+La IP puede proceder de UDP Discovery o de una dirección conocida/configurada por Mobile. Haber completado discovery no elimina las precondiciones ni la validación del handshake WebSocket.
 
 1. validar path;
 2. aceptar conexión;
@@ -593,11 +669,48 @@ Misma política que JSON con columnas estables.
 
 Mostrar health snapshot de cámara, visión, red, DB, filesystem y sistema. Un valor no obtenible de forma fiable debe mostrarse como `No disponible`.
 
+### UC-02-24 — Iniciar respondedor UDP auxiliar
+
+**Actor:** Sistema. **Trigger:** bootstrap de la aplicación.
+
+1. Solicitar inicio de Discovery Worker independientemente de Network Worker.
+2. Abrir socket UDP IPv4 y bind en `0.0.0.0:4211`.
+3. Exponer DiscoveryServiceState=LISTENING o ERROR.
+4. Mantener WebSocket, captura, pipeline y storage operativos aunque el bind UDP falle.
+
+No se exige que WebSocket ya esté disponible para abrir el socket UDP; su disponibilidad se consulta al decidir cada respuesta. No se establece un bucle de reintento automático ni un intervalo arbitrario en esta revisión.
+
+### UC-02-25 — Descubrir laptop y responder al origen
+
+**Actor:** cliente UDP Mobile existente. **Precondición:** Discovery Worker LISTENING.
+
+1. Recibir el datagrama completo y su dirección origen `(ip, port)`.
+2. Validar coincidencia exacta UTF-8 con `BLANQUITA_VISION_DISCOVER`.
+3. Consultar snapshot local de NetworkServerState.
+4. Si WebSocket está LISTENING o CLIENT_CONNECTED, responder `BLANQUITA_VISION_HERE:8765` desde UDP 4211, unicast al mismo `(ip, port)`.
+5. Si la solicitud es inválida o WebSocket no está disponible, no enviar respuesta UDP ni ejecutar acciones.
+6. Mobile obtiene la IP de origen de la respuesta y construye `ws://IP_LAPTOP:8765/vision`.
+7. El handshake y la operación posterior siguen UC-02-02 y los casos WebSocket existentes.
+
+El puerto destino de la respuesta puede ser efímero: no se presupone que el móvil escuche en 4211. Datagramas repetidos no crean sesiones ni workers adicionales.
+
+### UC-02-26 — Degradación independiente de discovery
+
+Ante bind, recepción o envío UDP fallidos: informar error del componente discovery, mantener diagnóstico y estado propio y conservar WebSocket sin cerrarlo ni reiniciarlo. Un fallo de envío aislado no se presenta como respuesta entregada.
+
+Si WebSocket está STARTING, STOPPED, STOPPING o ERROR, discovery no anuncia HERE. Puede seguir escuchando; cuando WebSocket vuelva a un estado elegible, la próxima solicitud válida podrá ser respondida sin exigir reiniciar UDP.
+
+### UC-02-27 — Cerrar discovery
+
+Solicitar cancelación, dejar de responder, liberar socket UDP y finalizar Discovery Worker con la política de cierre existente. Detener solo discovery no cierra clientes WebSocket. Al cerrar toda la app se coordinan ambos lifecycles, sin usar el resultado de UDP como precondición del cierre WebSocket.
+
 ---
 
 ## 7. Requisitos funcionales
 
-### Protocolo
+### Protocolo operativo WebSocket
+
+RF-02-001 a RF-02-028 describen mensajes y acciones del canal WebSocket. Los datagramas de discovery tienen contrato separado en RF-02-166 a RF-02-182 y no deben envolverse en JSON ni recibir campos adicionales.
 
 **RF-02-001** El sistema deberá utilizar JSON versionado.
 
@@ -965,6 +1078,42 @@ Mostrar health snapshot de cámara, visión, red, DB, filesystem y sistema. Un v
 
 **RF-02-165** CPU/RAM/GPU detallados no deberán inventarse si no son obtenibles fiablemente.
 
+### UDP Discovery
+
+**RF-02-166** BLANQUITA Vision deberá actuar como respondedor UDP auxiliar para el cliente Mobile existente, exclusivamente dentro de la LAN.
+
+**RF-02-167** El respondedor deberá escuchar UDP IPv4 en `0.0.0.0:4211`.
+
+**RF-02-168** Discovery deberá iniciar con la aplicación mediante un lifecycle independiente; su inicio exitoso no será precondición del inicio WebSocket.
+
+**RF-02-169** Solo `BLANQUITA_VISION_DISCOVER`, codificado UTF-8 exacto sin caracteres adicionales, será solicitud válida.
+
+**RF-02-170** La respuesta deberá ser exactamente `BLANQUITA_VISION_HERE:8765`, UTF-8 sin BOM, terminadores ni campos adicionales.
+
+**RF-02-171** La respuesta deberá salir del socket UDP 4211 y dirigirse unicast a la IP y puerto origen de la solicitud, sin forzar 4211 como puerto destino del móvil.
+
+**RF-02-172** La interoperabilidad deberá permitir que Mobile tome la IP origen de la respuesta y conecte a `ws://IP_LAPTOP:8765/vision`.
+
+**RF-02-173** Solo se enviará HERE cuando NetworkServerState sea LISTENING o CLIENT_CONNECTED; en otros estados WebSocket no se anunciará el endpoint.
+
+**RF-02-174** Cámara desconectada, detector detenido o calibración ausente no impedirán responder discovery si WebSocket está disponible.
+
+**RF-02-175** Datagramas vacíos, inválidos, con bytes adicionales o truncados no deberán producir respuesta ni acción operativa.
+
+**RF-02-176** UDP no transportará VisionReport, estados, vision.error, heartbeat, start/stop/ping, comandos físicos ni datos continuos.
+
+**RF-02-177** Un fallo UDP no cerrará ni reiniciará el servidor/clientes WebSocket, la captura, el pipeline o storage.
+
+**RF-02-178** DIAGNÓSTICOS deberá mostrar por separado estado discovery, bind/puerto, condición de anuncio, último error y contadores disponibles de solicitudes válidas, inválidas, respuestas enviadas y fallos de envío.
+
+**RF-02-179** Discovery no marcará Mobile como conectado, no reservará el cliente único y no creará vision_sessions. El límite de cliente activo sigue perteneciendo exclusivamente a WebSocket.
+
+**RF-02-180** El cierre deberá cancelar y liberar el socket/worker discovery explícitamente, sin workers huérfanos.
+
+**RF-02-181** El respondedor no emitirá anuncios espontáneos o broadcast de respuesta: únicamente responderá unicast a solicitudes válidas y elegibles.
+
+**RF-02-182** Una conexión WebSocket activa deberá seguir intercambiando mensajes y heartbeat durante un fallo o detención aislada de discovery.
+
 ---
 
 ## 8. Requisitos no funcionales
@@ -1033,6 +1182,26 @@ Mostrar health snapshot de cámara, visión, red, DB, filesystem y sistema. Un v
 
 **RNF-02-032** Polars fuera del pipeline crítico.
 
+**RNF-02-033** Recepción/envío UDP y esperas de socket se ejecutarán fuera del hilo UI.
+
+**RNF-02-034** Discovery mantendrá Ports & Adapters; domain/application no importarán socket concreto ni frameworks de UI para este contrato.
+
+**RNF-02-035** Discovery Worker tendrá cancelación y límites de fallo propios; no compartirá un fallo fatal de lifecycle que derribe Network Worker.
+
+**RNF-02-036** El manejo de datagramas será acotado, sin colas ilimitadas. La validación no aceptará un prefijo válido obtenido por truncar un datagrama mayor.
+
+**RNF-02-037** El diseño utilizará capacidades del stack aprobado o stdlib (`socket`/`asyncio`), sin requerir nuevas dependencias.
+
+**RNF-02-038** La consulta de disponibilidad WebSocket será un snapshot seguro entre hilos, sin bloquear su arranque ni ejecutar acciones en el hilo propietario de discovery.
+
+**RNF-02-039** Discovery no sustituirá handshake, validación JSON, ready, heartbeat ni stale contract WebSocket.
+
+**RNF-02-040** La latencia y fiabilidad de discovery se medirán sin fijar objetivos numéricos arbitrarios; permanecerán TBD mediante pruebas LAN cuando corresponda.
+
+**RNF-02-041** El resultado de send UDP solo acreditará envío local del datagrama, no recepción por Mobile ni conexión WebSocket establecida.
+
+**RNF-02-042** Los logs UDP distinguirán transiciones/fallos de los contadores de tráfico; no se exigirá una fila SQLite ni un log INFO por solicitud/respuesta.
+
 ---
 
 ## 9. Reglas de negocio / dominio
@@ -1053,7 +1222,7 @@ Mostrar health snapshot de cámara, visión, red, DB, filesystem y sistema. Un v
 
 **BR-02-008** Z continúa null.
 
-**BR-02-009** Máximo un cliente Mobile activo.
+**BR-02-009** Máximo un cliente Mobile WebSocket activo.
 
 **BR-02-010** Mobile puede start/stop visión, no hardware físico.
 
@@ -1068,6 +1237,14 @@ Mostrar health snapshot de cámara, visión, red, DB, filesystem y sistema. Un v
 **BR-02-015** Capturas V1 = manuales.
 
 **BR-02-016** V1 = sin auto-delete.
+
+**BR-02-017** UDP descubre dirección; WebSocket transporta percepción y comandos del subsistema de visión.
+
+**BR-02-018** HERE anuncia un endpoint WebSocket escuchando; no implica cámara lista, objeto detectado, calibración válida ni movimiento autorizado.
+
+**BR-02-019** Una consulta discovery no es una conexión ni altera la exclusividad del cliente WebSocket.
+
+**BR-02-020** La ausencia de discovery no impide utilizar WebSocket por una IP conocida.
 
 ---
 
@@ -1132,9 +1309,31 @@ DROPPED_STALE
 ERROR
 ```
 
+### 10.6. DiscoveryServiceState
+
+```text
+STOPPED
+STARTING
+LISTENING
+STOPPING
+ERROR
+
+STOPPED --bootstrap/start--> STARTING --bind UDP success--> LISTENING
+STARTING --bind failure--> ERROR
+LISTENING --fatal receive/socket failure--> ERROR
+LISTENING --valid request + WS available--> LISTENING (respuesta unicast)
+LISTENING --invalid request / WS unavailable--> LISTENING (sin respuesta)
+LISTENING --isolated send failure--> LISTENING (error registrado)
+LISTENING/STARTING/ERROR --app close/stop--> STOPPING --socket released--> STOPPED
+```
+
+No existe CLIENT_CONNECTED para UDP: el respondedor no mantiene sesiones cliente. Discovery LISTENING significa socket UDP disponible, no que HERE deba enviarse si WebSocket no escucha. Estas transiciones no cambian NetworkServerState ni ClientState.
+
 ---
 
 ## 11. Modelo de datos
+
+Los envelopes y payloads de las secciones 11.1 a 11.11 pertenecen a WebSocket. Discovery usa el contrato literal separado de la sección 11.21.
 
 ### 11.1. ProtocolEnvelope
 
@@ -1406,6 +1605,36 @@ recoverable
 details_json?
 ```
 
+### 11.21. Contrato de datagramas y snapshot de discovery
+
+```text
+request_text = BLANQUITA_VISION_DISCOVER
+response_text = BLANQUITA_VISION_HERE:8765
+encoding = UTF-8 exacto
+udp_bind = 0.0.0.0
+udp_port = 4211
+response_destination = request_source_ip + request_source_port
+```
+
+La solicitud no contiene IP, puerto de respuesta configurable, JSON ni parámetros. La respuesta solo contiene identificador y puerto WebSocket. No se añaden UUID, timestamp, payload o estado al datagrama.
+
+Snapshot interno para diagnóstico:
+
+```text
+DiscoveryStatus
+- state: DiscoveryServiceState
+- bind_address
+- udp_port
+- websocket_advertisable: bool
+- valid_requests_count
+- invalid_requests_count
+- responses_sent_count
+- send_errors_count
+- last_error: str?
+```
+
+Este snapshot nunca se envía por UDP. Si se registran tiempos de recepción/envío o errores en diagnóstico/persistencia local, se aplica UTC; UI convierte solo al presentar.
+
 ---
 
 ## 12. Interfaces / Ports
@@ -1455,6 +1684,20 @@ Persistencia de ajustes validados.
 
 Agrega snapshots camera/vision/network/database/filesystem/system sin requerir dependencias nuevas.
 
+También agrega el snapshot de discovery separado del estado WebSocket.
+
+### 12.7. DiscoveryResponderPort
+
+Contrato conceptual de lifecycle auxiliar:
+
+```text
+start()                 solicita inicio sin bloquear UI ni WebSocket
+stop()                  solicita cancelación/liberación independiente
+snapshot()              devuelve DiscoveryStatus
+```
+
+La disponibilidad WebSocket se proporciona por snapshot/abstracción de Application; el adapter no consulta widgets ni toma autoridad sobre Network Worker. El Port no expone publicación de VisionReport ni comandos por UDP.
+
 ---
 
 ## 13. Adapters
@@ -1497,6 +1740,12 @@ Guarda JPG/PNG bajo capture root.
 ### 13.5. SystemDiagnosticsProvider
 
 Usa stdlib/Qt/componentes aprobados. No `psutil`.
+
+### 13.6. UdpDiscoveryResponder
+
+El adapter se compone de UdpDiscoveryResponder, propietario del socket UDP en Discovery Worker, y la fachada QtDiscoveryController que implementa DiscoveryResponderPort (start/stop/snapshot). Encapsula bind, validación completa del datagrama, consulta de elegibilidad, respuesta unicast y traducción de errores a diagnóstico local.
+
+No utiliza ReportPublisherPort para discovery, no enruta comandos al pipeline y no inicializa/cierra el servidor WebSocket. El envío usa la dirección origen real de la solicitud, no direcciones aportadas en el cuerpo.
 
 ---
 
@@ -1576,6 +1825,32 @@ latest compatible valid calibration
 SPEC-01 pipeline
 ```
 
+### 14.6. Bootstrap independiente y descubrimiento → WebSocket
+
+```text
+Application bootstrap
+   ├── Network Worker ─── TCP 0.0.0.0:8765, /vision
+   ├── Discovery Worker ─ UDP 0.0.0.0:4211
+   └── Storage Worker
+
+No existe dependencia de éxito Discovery → inicio Network Worker.
+
+Mobile UDP request → laptop UDP 4211
+                          ↓ validar datagrama completo
+                          ↓ consultar NetworkServerState
+                 LISTENING / CLIENT_CONNECTED ?
+                     ├── no → sin respuesta; UDP puede seguir escuchando
+                     └── sí → HERE:8765 unicast al origen de la solicitud
+                                  ↓
+                         Mobile toma IP origen de respuesta
+                                  ↓
+                         ws://IP_LAPTOP:8765/vision
+                                  ↓
+                         handshake + protocolo WebSocket existente
+```
+
+Los textos completos de solicitud/respuesta son los de la sección 1.6; HERE:8765 en este diagrama es una abreviatura explicativa, no otro mensaje aceptado.
+
 ---
 
 ## 15. Concurrencia
@@ -1592,6 +1867,7 @@ No ejecutará:
 - encoding/escritura de captura;
 - export pesado;
 - query histórica grande.
+- recepción/envío ni esperas UDP de discovery.
 
 ### 15.2. Camera Worker
 
@@ -1611,6 +1887,8 @@ Responsable de:
 - heartbeat;
 - latest pending report;
 - network states.
+
+Su arranque y operación no dependen de Discovery Worker. Mantiene por sí mismo el servidor TCP/WebSocket y heartbeat.
 
 ### 15.5. Storage Worker
 
@@ -1653,13 +1931,21 @@ close SQLite
 close workers
 ```
 
+También se deja de aceptar discovery y se cancela/libera su socket durante shutdown, como rama de cierre independiente. Detener discovery por sí solo no activa este shutdown global. La espera asíncrona de cinco segundos existente permite informar operaciones pendientes sin finalizar forzosamente hilos.
+
+### 15.8. Discovery Worker
+
+Posee exclusivamente el respondedor UDP. Se solicita su inicio desde bootstrap sin esperar el bind como precondición de WebSocket. Recepción/envío y cancelación quedan fuera del hilo UI.
+
+La condición para emitir HERE se lee de un snapshot seguro de NetworkServerState; no exige arrancar cámara/detector ni una llamada bloqueante al worker WebSocket. Los callbacks/errores UDP se contienen en discovery. No hay bucle de reintento o escaneo originado por la laptop, ni cola de datagramas sin límite definida por la aplicación.
+
 ---
 
 ## 16. Manejo de errores
 
 | Error | Reacción | Recuperación | Estado/log |
 |---|---|---|---|
-| Puerto ocupado | server no inicia | liberar/cambiar solo con autorización | ERROR |
+| Puerto TCP 8765 ocupado | WebSocket no inicia; UDP no anuncia HERE | liberar/cambiar solo con autorización | Network ERROR |
 | Path incorrecto | rechazar | usar /vision | WARNING |
 | Segundo cliente | rechazar segundo | esperar cliente libre | WARNING |
 | JSON malformado | vision.error, no acción | cliente corrige | WARNING |
@@ -1676,8 +1962,18 @@ close workers
 | Export write falla | informar | elegir otra ruta | ERROR |
 | Pydantic serialization falla | no enviar | corregir error interno | ERROR |
 | NaN/Inf | rechazar report | invalidar resultado | ERROR |
+| Puerto UDP 4211 ocupado | Discovery ERROR; WebSocket continúa/inicia independientemente | liberar puerto; un nuevo intento de lifecycle requiere socket disponible | ERROR discovery |
+| Bind UDP sin permisos/configuración inválida | informar diagnóstico discovery; no cambiar endpoint WS | corregir permisos/configuración | ERROR discovery |
+| Datagrama UDP vacío/ajeno/con terminadores/oversized o truncado | ignorar sin respuesta ni acción; contabilizar invalidez | siguiente solicitud válida | LISTENING discovery |
+| WebSocket aún no disponible | no responder HERE; no cerrar el socket UDP sano | responder próxima solicitud al estar WS disponible | estado WS propio; discovery LISTENING |
+| Envío UDP aislado falla | registrar fallo; no contar respuesta como enviada ni tocar WS | atender siguientes solicitudes si socket sano | WARNING discovery |
+| Error fatal de recepción/socket UDP | detener componente discovery, mostrar ERROR y liberar recurso | intervención/nuevo inicio del servicio | ERROR discovery; WS conserva su estado |
+| Broadcast bloqueado/firewall/aislamiento Wi-Fi | ausencia de respuesta observada por Mobile; no inventar fallo confirmado del servidor | diagnóstico LAN; WS puede utilizar IP conocida | sin cambio automático del estado WS |
+| Cancelación durante espera UDP | desbloquear/cancelar espera y liberar socket sin hilo huérfano | ninguna al cerrar | STOPPING → STOPPED discovery |
 
 Perder Mobile no deberá cerrar cámara, UI o control manual del sistema.
+
+Los errores UDP se comunican por diagnóstico/log local. No se envían vision.error ni otros mensajes operativos mediante UDP, ni se altera WebSocket para notificar un fallo de discovery.
 
 ---
 
@@ -1729,6 +2025,22 @@ export_failed
 - metric samples persisted.
 
 No afirmar RTT de red si el mecanismo no lo mide realmente.
+
+### 17.4. Observabilidad discovery
+
+Eventos locales de lifecycle/fallo:
+
+```text
+discovery_starting
+discovery_listening
+discovery_bind_failed
+discovery_receive_failed
+discovery_send_failed
+discovery_stopping
+discovery_stopped
+```
+
+Contadores de solicitudes válidas/invalidas, respuestas enviadas y fallos de envío según RF-02-178. No se requiere fila SQLite por datagrama ni mensajes de estado por UDP. Registrar un envío no prueba recepción ni éxito de WebSocket. La respuesta literal nunca incorpora estos datos.
 
 ---
 
@@ -1836,6 +2148,8 @@ UI muestra hora local; datos/export conservan UTC.
 - heartbeat;
 - last error.
 
+Discovery debe distinguirse dentro de NETWORK como subcomponente **UDP DISCOVERY**: bind/puerto 4211, estado propio, condición de anuncio WebSocket, último error y contadores. Un ERROR de discovery no se presenta como ERROR de WebSocket si este sigue LISTENING/CLIENT_CONNECTED; recibir discovery no muestra Mobile: Conectado.
+
 #### DATABASE
 
 - path;
@@ -1878,7 +2192,11 @@ bind = 0.0.0.0
 port = 8765
 path = /vision
 protocol version = 1
+discovery UDP bind = 0.0.0.0
+discovery UDP port = 4211
 ```
+
+Los dos servicios conservan estados independientes. No se habilita cambio de tokens o puertos de discovery desde Mobile ni se modifica el endpoint WebSocket.
 
 ---
 
@@ -1900,7 +2218,11 @@ Consecuencias:
 - un cliente máximo;
 - cero comandos físicos.
 
+Discovery es también exclusivo de LAN, sin autenticación nueva. La respuesta UDP no autentica a la laptop ni autoriza acciones; se establece y valida el WebSocket posterior. No se anuncian direcciones a Internet ni se envían respuestas UDP broadcast o datos continuos.
+
 ### 19.2. Input
+
+Ruta de mensajes operativos WebSocket:
 
 ```text
 text
@@ -1913,6 +2235,17 @@ router
 ↓
 use case
 ```
+
+Ruta separada de discovery:
+
+```text
+datagrama UDP completo + dirección origen
+   ↓ comparación exacta con solicitud permitida
+   ↓ snapshot WebSocket elegible
+respuesta literal unicast al origen
+```
+
+No existe conexión desde esta ruta al router StartVision/StopVision/Ping ni al ESP32. JSON, bytes ajenos y comandos recibidos por UDP se ignoran. Una solicitud con prefijo válido y bytes adicionales/truncados no se acepta.
 
 ### 19.3. Filesystem
 
@@ -2147,6 +2480,10 @@ NO limpieza por días
 NO limpieza por tamaño
 NO borrado automático de capturas
 ```
+
+### 20.14. Alcance de persistencia discovery
+
+Discovery no genera vision_sessions, detecciones, reportes ni capturas. Los eventos de lifecycle/fallo pueden utilizar la infraestructura existente de eventos/errores, sin nueva tabla ni fila obligatoria por datagrama y sin hacer que la disponibilidad UDP dependa de SQLite.
 
 ---
 
@@ -2404,6 +2741,78 @@ Medir writes/query times/DB growth/queue. Umbrales: TBD. Tipo: PERFORMANCE.
 
 No existe job automático destructivo. Tipo: ARCHITECTURE/INTEGRATION.
 
+### TC-02-064 — Arranque UDP independiente
+
+Iniciar los componentes en ambos órdenes de arranque. Resultado: discovery puede abrir UDP IPv4 0.0.0.0:4211 aunque WebSocket todavía no haya iniciado; WebSocket no espera éxito de discovery. Tipo: INTEGRATION/LIFECYCLE. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-065 — Contrato literal de discovery
+
+Con UDP LISTENING y WS LISTENING, enviar el datagrama UTF-8 exacto BLANQUITA_VISION_DISCOVER. Resultado: exactamente BLANQUITA_VISION_HERE:8765, sin BOM, terminadores, envelope ni otros datos; origen laptop UDP 4211. Tipo: CONTRACT/INTEGRATION. Estado: VALIDADO EN SOFTWARE, incluido caso de puertos fijos; ver 28.5.
+
+### TC-02-066 — Respuesta al puerto origen efímero
+
+Enviar desde un cliente con puerto origen distinto de 4211. Resultado: respuesta unicast al par IP/puerto real del cliente; no se fuerza destino 4211 ni se envía broadcast. Tipo: INTEGRATION. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-067 — Datagramas inválidos, grandes o truncados
+
+Probar vacío, texto ajeno, minúsculas, BOM, espacios, salto de línea, terminador nulo, bytes no UTF-8 y solicitud válida seguida de bytes adicionales. Comprobar recepción completa de un datagrama grande con prefijo válido, sin reducir la comparación al prefijo. Resultado: ninguna respuesta ni acción; el buffer cubre el máximo de payload IPv4 y se contabilizan inválidos. Tipo: NEGATIVE/EDGE. Estado: VALIDADO EN SOFTWARE con datagramas reales loopback, incluido prefijo válido y 60.000 bytes extra; ver 28.5.
+
+### TC-02-068 — UDP 4211 ocupado no impide WebSocket
+
+Ocupar el puerto UDP antes de iniciar la app. Resultado: discovery ERROR con diagnóstico; WebSocket puede alcanzar LISTENING, aceptar /vision y emitir hello/ready/heartbeat. No se altera TCP 8765. Tipo: FAULT INJECTION/INTEGRATION. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-069 — Fallo fatal UDP con WebSocket activo
+
+Conectar un cliente WS e inyectar error fatal de recepción/socket discovery. Resultado: error y liberación del componente UDP; cliente WS permanece conectado e intercambia mensajes/heartbeat; UI, captura, pipeline y storage no se cierran por este fallo. Tipo: FAULT INJECTION. Estado: VALIDADO EN SOFTWARE con fallos inyectados y cliente WS loopback; ver 28.5.
+
+### TC-02-070 — Fallo aislado de envío UDP
+
+Inyectar fallo al responder. Resultado: se registra send error, no se incrementa respuesta exitosa, WS no se modifica y próximas solicitudes pueden procesarse si el socket sigue sano. Tipo: NEGATIVE. Estado: VALIDADO EN SOFTWARE, incluido reset remoto UDP simulado de Windows; ver 28.5.
+
+### TC-02-071 — Elegibilidad y recuperación de disponibilidad WS
+
+Con discovery LISTENING, probar WS STOPPED, STARTING, STOPPING y ERROR: sin HERE. Transicionar WS a LISTENING: próxima solicitud válida recibe HERE sin reiniciar UDP. Tipo: UNIT/INTEGRATION. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-072 — Discovery sin cámara o detector
+
+WS LISTENING, cámara DISCONNECTED, pipeline STOPPED y calibración UNCALIBRATED. Resultado: solicitud válida recibe HERE; no se abre cámara, no se inicia detector y no cambia ready operativo por el datagrama. Tipo: INTEGRATION. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-073 — Discovery no reserva cliente WS
+
+Con cliente WS A conectado, otro origen consulta UDP. Resultado: recibe HERE porque WS está CLIENT_CONNECTED; A conserva su conexión. Si B intenta abrir WebSocket, se aplica el rechazo de segundo cliente existente. Tipo: EDGE/INTEGRATION. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-074 — Solicitudes repetidas y distintos orígenes
+
+Enviar solicitudes válidas repetidas desde uno y varios puertos/IP de prueba. Resultado: sin vision_sessions, conexiones WS, reservas o workers duplicados; cada respuesta elegible corresponde a su origen. Tipo: EDGE/ARCHITECTURE. Estado: VALIDADO EN SOFTWARE con puertos distintos en loopback y comprobación de sesiones; interfaces/IP reales siguen TC-02-080.
+
+### TC-02-075 — Sin ruta de comandos ni reportes por UDP
+
+Enviar JSON vision.start/stop/ping y comandos físicos por UDP. Resultado: no se invocan casos de uso, no se devuelve vision.error ni otro dato operativo y no existe canal ESP32. Verificar que el respondedor no publique VisionReport/estados/heartbeat por UDP. Tipo: SECURITY/ARCHITECTURE. Estado: VALIDADO EN SOFTWARE; ver 28.5.
+
+### TC-02-076 — Cancelación y liberación UDP
+
+Detener discovery mientras espera un datagrama: socket/worker finalizan y UDP 4211 vuelve a estar disponible; WS activo permanece. Cerrar toda la app: ambos servicios se liberan por sus lifecycles, sin hilo discovery huérfano ni terminación forzosa. Tipo: CONCURRENCY/LIFECYCLE. Estado: VALIDADO EN SOFTWARE con liberación/rebind e integración de cierre; ver 28.5.
+
+### TC-02-077 — Concurrencia y diagnóstico independiente
+
+Usar tráfico UDP de prueba mientras UI/navegación y operaciones WS continúan; comprobar buffers acotados y diagnóstico separado. Discovery ERROR no marca WS ERROR ni Mobile conectado/desconectado por sí solo. No se fija umbral numérico de FPS/latencia. Tipo: CONCURRENCY/UI INTEGRATION. Estado: VALIDADO EN SOFTWARE con Qt offscreen; ver 28.5.
+
+### TC-02-078 — Flujo discovery → WebSocket en software
+
+Cliente UDP de prueba obtiene HERE y extrae la IP de origen; construye ws://IP_LAPTOP:8765/vision y recibe hello/ready/status válidos. Resultado: contrato WS v1, endpoint, cliente único y heartbeat existentes conservados. Tipo: SOFTWARE INTEGRATION. Estado: VALIDADO EN SOFTWARE con UDP 4211/TCP 8765; el test se omite si esos puertos están ocupados por otra instancia; ver 28.5.
+
+### TC-02-079 — Cliente Mobile existente y LAN real
+
+En la misma LAN sin Internet, usar el cliente discovery Mobile ya existente. Verificar solicitud, retorno al puerto origen, IP origen alcanzable y conexión WS posterior a 8765/vision. Resultado documentado con dispositivo/red reales; no acreditarlo con loopback. Tipo: TEST CON MOBILE/RED REAL. Estado: PENDIENTE.
+
+### TC-02-080 — Interfaces y dirección origen
+
+En entorno con interfaces relevantes Wi-Fi/Ethernet, comprobar que la IP origen de la respuesta es alcanzable por el móvil y admite el WS posterior. No enviar 0.0.0.0 ni otra IP en el cuerpo literal. Tipo: TEST CON RED REAL. Estado: PENDIENTE.
+
+### TC-02-081 — Medición de discovery
+
+Medir desde un cliente el tiempo transcurrido entre solicitud y respuesta y la proporción observada de solicitudes/respuestas bajo condiciones LAN documentadas. Separar discovery del tiempo de handshake WS y no inventar objetivos numéricos. Tipo: PERFORMANCE/RED. Umbrales: TBD. Estado: PENDIENTE.
+
 ---
 
 ## 22. Criterios de aceptación
@@ -2448,9 +2857,29 @@ No existe job automático destructivo. Tipo: ARCHITECTURE/INTEGRATION.
 
 **AC-02-020** DADO contenido remoto fuera de protocolo, CUANDO valida, ENTONCES se rechaza y nunca alcanza ESP32.
 
+**AC-02-021** DADO bootstrap, CUANDO UDP 4211 está libre, ENTONCES discovery escucha independientemente de WS; su fallo no impide que WS inicie en 8765/vision.
+
+**AC-02-022** DADA solicitud UDP exacta y WS disponible, CUANDO se responde, ENTONCES el cliente recibe el texto exacto HERE definido en 1.6, unicast a su IP/puerto origen, y puede obtener la IP de laptop del origen de respuesta.
+
+**AC-02-023** DADO un datagrama inválido, con caracteres extra o truncado, CUANDO se recibe, ENTONCES no hay respuesta ni ejecución de comandos o publicación de datos operativos.
+
+**AC-02-024** DADO WS LISTENING/CLIENT_CONNECTED, CUANDO cámara/detector no están activos, ENTONCES discovery puede responder; con WS en cualquier otro estado no anuncia HERE.
+
+**AC-02-025** DADA conexión WS activa, CUANDO discovery falla o se detiene aisladamente, ENTONCES WS conserva su conexión, mensajes y heartbeat sin depender de UDP.
+
+**AC-02-026** DADAS solicitudes discovery de otros orígenes o repetidas, CUANDO se atienden, ENTONCES no crean sesiones, workers duplicados ni reservas de cliente y el máximo de un cliente WS se conserva.
+
+**AC-02-027** DADO discovery activo o esperando I/O, CUANDO se cierra, ENTONCES libera UDP 4211 y su worker mediante cancelación explícita sin bloquear permanentemente UI ni dejar recursos huérfanos.
+
+**AC-02-028** DADO el cliente discovery Mobile existente, CUANDO descubre la laptop en LAN, ENTONCES usa la IP origen y conecta por ws://IP_LAPTOP:8765/vision, donde comienza el contrato WS v1 existente.
+
+**AC-02-029** DADOS los dos servicios, CUANDO se observan diagnósticos, ENTONCES los estados/errores UDP y WS se distinguen; discovery no equivale a ready, autenticación ni Mobile conectado.
+
 ---
 
 ## 23. Definition of Done
+
+La lista define condiciones de cierre de la revisión completa; no sustituye evidencia de pruebas. La entrega UDP y su validación en software se registran en 28.5; Mobile/LAN reales permanecen pendientes.
 
 ```text
 ✓ modelos Pydantic protocolo v1
@@ -2495,15 +2924,31 @@ No existe job automático destructivo. Tipo: ARCHITECTURE/INTEGRATION.
 ✓ tests pasan
 ✓ documentación actualizada
 ✓ sin operaciones Git por agentes
+✓ UdpDiscoveryResponder / DiscoveryResponderPort
+✓ Discovery Worker fuera de UI
+✓ UDP IPv4 0.0.0.0:4211
+✓ solicitud/respuesta exactas UTF-8 sin terminadores
+✓ respuesta unicast a IP/puerto origen
+✓ IP obtenida del origen de respuesta y WS posterior 8765/vision
+✓ anuncio solo con WS LISTENING/CLIENT_CONNECTED
+✓ ausencia de cámara/detector no bloquea discovery elegible
+✓ arranque/fallo/cierre discovery independiente de WebSocket
+✓ sin datos operativos, comandos o broadcasts de respuesta UDP
+✓ diagnóstico separado y recursos UDP liberados
+✓ tests UDP y regresiones WS ejecutados, con alcance registrado
 ```
 
 ### 23.1. VALIDADO EN SOFTWARE
 
 Requiere protocol, async WebSocket, DB, filesystem, UI integration, concurrency y fault tests.
 
+Para la revisión 1.1.0 requiere adicionalmente contrato UDP, datagramas inválidos/truncados, retorno al puerto origen, independencia de fallos/arranque/cierre, concurrencia y flujo discovery → WS en software. La evidencia previa de 1.0.0 no satisface automáticamente estos tests nuevos.
+
 ### 23.2. VALIDADO EN RED/DISPOSITIVO REAL
 
 Requiere Mobile real, Wi-Fi/LAN real, interoperabilidad, heartbeat/stale, desconexión/reconexión y operación sin Internet.
+
+Incluye discovery mediante el cliente Mobile ya existente, IP origen alcanzable, conexión WS posterior y condiciones de red/interfaces documentadas. Los fallos de broadcast pueden existir aun cuando WS por IP conocida funcione.
 
 No declarar interoperabilidad Mobile validada solo con fake client.
 
@@ -2544,6 +2989,8 @@ NO modifica:
 ### DESBLOQUEA SPEC-03
 
 Entrega protocolo, red, storage, histórico, métricas, diagnósticos, reportes e integración.
+
+Incluye el contrato de discovery auxiliar de esta revisión, sin alterar los modelos de percepción heredados. El cliente UDP Mobile existente es un contrato externo de interoperabilidad; no se implementa ni modifica desde esta SPEC de laptop.
 
 SPEC-03 se centrará en:
 
@@ -2649,6 +3096,26 @@ Mitigación: benchmark de DB y latest-only de red.
 
 Mitigación: match camera/resolution + obligación operacional de recalibrar si cambió geometría.
 
+### RISK-02-012 — Discovery bloqueado por la LAN
+
+Firewall, broadcast filtrado o aislamiento de clientes Wi-Fi pueden impedir solicitudes/respuestas UDP. Mitigación: diagnóstico separado, prueba Mobile/LAN real y conservación de WS utilizable por IP conocida. No inferir que WS esté caído solo porque Mobile no recibe discovery.
+
+### RISK-02-013 — Respuesta discovery suplantada
+
+Los textos UDP no autentican identidad ni disponibilidad física de cámara. Mitigación: LAN privada, uso de discovery únicamente para encontrar un candidato, handshake/validación WS posteriores y ausencia de autorización física derivada de HERE. No se añade token/TLS no aprobado.
+
+### RISK-02-014 — Laptop con varias interfaces o cambios de IP
+
+La dirección origen de respuesta debe ser alcanzable desde Mobile; no anunciar una IP elegida arbitrariamente en el cuerpo ni usar 0.0.0.0 como destino WS. Mitigación: pruebas Wi-Fi/Ethernet, bind IPv4 aprobado y construcción del endpoint desde el origen real de respuesta.
+
+### RISK-02-015 — Varias laptops respondedoras
+
+Un discovery puede recibir respuestas de distintas IP de laptop en la LAN. La selección pertenece al cliente Mobile existente y queda fuera de la implementación de laptop. Cada instancia conserva su cliente único WS; una respuesta UDP no reserva ese cliente ni autentica cuál laptop fue elegida.
+
+### RISK-02-016 — Acoplamiento accidental o anuncio con WS no disponible
+
+Un fallo UDP no debe derribar WS, y un socket UDP sano no implica que el endpoint TCP esté escuchando. Mitigación: lifecycle/worker separado, snapshot de estados WS elegibles, pruebas de startup en ambos órdenes y fallos inyectados con un cliente WS activo.
+
 ---
 
 ## 27. Trazabilidad
@@ -2680,12 +3147,27 @@ Mitigación: match camera/resolution + obligación operacional de recalibrar si 
 | RNF-02-019..023 | network/security | TC-02-056..058 | AC-02-020 |
 | RNF-02-024..027 | faults | TC-02-022/046/054/055 | AC-02-018 |
 | RNF-02-028..032 | todos | static/architecture | AC-02-018/020 |
+| RF-02-166..168 | UC-02-24 | TC-02-064/068 | AC-02-021 |
+| RF-02-169..172 | UC-02-25 | TC-02-065/066/078/079/080 | AC-02-022/028 |
+| RF-02-173/174 | UC-02-25/26 | TC-02-071/072 | AC-02-024 |
+| RF-02-175/176/181 | UC-02-25 | TC-02-067/075 | AC-02-023 |
+| RF-02-177/182 | UC-02-24/26/27 | TC-02-068/069/070/076 | AC-02-021/025 |
+| RF-02-178/179 | UC-02-23/25 | TC-02-073/074/077 | AC-02-026/029 |
+| RF-02-180 | UC-02-27 | TC-02-076 | AC-02-027 |
+| RNF-02-033..038 | UC-02-24..27 | TC-02-064/067/068/069/076/077 | AC-02-021/023/025/027 |
+| RNF-02-039/041 | UC-02-25 | TC-02-072/073/074/078 | AC-02-026/028/029 |
+| RNF-02-040 | UC-02-25 | TC-02-079/080/081 | AC-02-028 |
+| RNF-02-042 | UC-02-23/26 | TC-02-070/077 | AC-02-029 |
+
+Los identificadores existentes se conservan. Los casos UDP nuevos TC-02-064 a TC-02-081 no están incluidos en el resultado histórico de 28.2. Su cobertura en software y los casos de red real pendientes se registran en 28.5.
 
 ---
 
 ## 28. Registro de implementación y verificación
 
 ### 28.1. Entrega funcional
+
+Registro histórico de la revisión **1.0.0**, anterior a UDP Discovery.
 
 Se implementaron modelos Pydantic, envelope/payload estrictos, UTC/Z, conversión exacta de mm/cm/m a mm, Report Mapper, ReportPublisherPort, WebSocketVisionServer, Network Worker, SQLiteVisionRepository, SQLiteCalibrationRepository con caché síncrona e I/O asíncrono, Storage Worker, capturas filesystem, ajustes, sesiones, agregación métrica y coordinación de shutdown.
 
@@ -2701,6 +3183,8 @@ Storage controla 256 trabajos con 192 ordinarios y reserva de 64, y dos capturas
 
 **Fecha de registro:** 6 de octubre de 2026.
 
+Resultado histórico para el alcance 1.0.0. Esta revisión documental no vuelve a ejecutar pruebas ni extiende ese resultado a UDP.
+
 ```text
 .venv\Scripts\python.exe -m pytest -q
 161 passed, 1 skipped
@@ -2714,11 +3198,47 @@ La omisión corresponde al test opcional de cámara física de SPEC-00, que requ
 
 ### 28.3. Estado y seguimiento
 
-**Estado documental: IMPLEMENTED. VALIDADO EN SOFTWARE** para los escenarios registrados. No se declara VALIDATED en red/dispositivo real.
+**Estado histórico de la revisión 1.0.0: IMPLEMENTED. VALIDADO EN SOFTWARE** para los escenarios registrados. No se declara VALIDATED en red/dispositivo real. La implementación y pruebas nuevas de 1.1.0 se registran separadamente en 28.5.
 
 Pendientes TC-02-058/059/060: Wi-Fi/LAN real sin Internet, interoperabilidad de BLANQUITA Mobile real y detección de stale a seis segundos. Los benchmarks TC-02-061/062 requieren registrar mediciones representativas; objetivos continúan TBD. El histórico se conserva indefinidamente, con crecimiento pendiente de medir.
 
 La validación física de SPEC-01 sigue pendiente y la limitación USB con DSHOW de SPEC-00 se hereda. Calibración VALID significa estado matemático/operativo del perfil, no certificación de precisión física ni autorización de movimiento. No se inicia SPEC-03 automáticamente.
+
+### 28.4. Revisión 1.1.0 — Aprobación inicial del contrato UDP
+
+**Autorización:** solicitud explícita de actualizar únicamente SPEC-02, seguida de confirmación del usuario sobre retorno unicast al origen, texto UTF-8 exacto y respuesta solo con WS disponible.
+
+**Estado histórico de la actualización documental:** APPROVED, anterior a implementación. En esa tarea solo se actualizó esta SPEC y no se ejecutaron pruebas. El usuario autorizó posteriormente implementar lo pendiente; la entrega se registra en 28.5 sin alterar los resultados históricos.
+
+Cambios: arquitectura discovery → WS, respondedor IPv4 4211, tokens exactos, origen de respuesta como IP de laptop, elegibilidad WS independiente de cámara, Port/adapter/worker separados, estados/errores/diagnóstico, pruebas/aceptación y trazabilidad/riesgos. El endpoint TCP/WS, JSON v1, heartbeat, cliente único y responsabilidades de percepción/decisión/ejecución permanecen como contratos operativos vigentes.
+
+Las menciones de descubrimiento futuro en los documentos base no implican reescritura de esos documentos: la autorización actual incorpora este servicio auxiliar en SPEC-02. Las reglas generales de envelope se delimitan al canal WS para evitar contradicción con los datagramas literales.
+
+### 28.5. Entrega UDP Discovery y verificación de software
+
+**Estado de revisión 1.1.0:** IMPLEMENTED. **VALIDADO EN SOFTWARE**, no en Mobile/LAN reales.
+
+Se implementaron DiscoveryServiceState/DiscoveryStatus, DiscoveryResponderPort, UdpDiscoveryResponder y su fachada QtDiscoveryController sobre Discovery Worker. Bootstrap inicia el worker automáticamente; OperationsService consulta/coordina el lifecycle por el Port. Se incluye en la espera asíncrona de cierre y su idle notifica a MainWindow.
+
+El socket UDP IPv4 es exclusivo, no reutiliza el puerto ocupado y recibe con buffer de 65.535 bytes, suficiente para el payload máximo IPv4; no compara prefijos truncados. Valida los bytes exactos y responde unicast al origen solo con WS LISTENING/CLIENT_CONNECTED. Los contadores y errores se muestran bajo NETWORK → UDP DISCOVERY, separados del estado WS. No hay anuncios periódicos ni datos operativos UDP.
+
+Un error aislado de envío y ConnectionResetError recibido por ICMP de un peer UDP ya cerrado se registran localmente sin reenviar ni derribar el socket sano/WebSocket. Bind o recepción fatal terminan solo discovery con ERROR y liberación del socket. No se agregaron dependencias ni se cambió el protocolo WS.
+
+Verificación ejecutada:
+
+```text
+.venv\Scripts\python.exe -m pytest -q tests/integration/test_udp_discovery.py tests/integration/test_discovery_lifecycle_ui.py
+30 passed
+
+.venv\Scripts\python.exe -m pytest -q
+191 passed, 1 skipped
+```
+
+Se comprobaron datagramas reales en loopback, retorno al puerto origen, formato literal, inválidos/sobresized, elegibilidad, respuesta sin cámara/detector, cliente WS único, continuidad WS/ping/heartbeat bajo fallos UDP, cancelación/liberación/rebind y concurrencia/diagnóstico Qt offscreen. TC-02-078 se ejecutó con puertos fijos UDP 4211 y TCP 8765, construyendo el URL desde el origen de la respuesta.
+
+La omisión de esta ejecución completa es la prueba opcional de cámara física de SPEC-00. El test de puertos fijos tiene una omisión condicional si otra instancia ocupa dichos puertos; en esta ejecución pasó. El reset remoto y los fallos fatales fueron inyectados, no reportados como validación física.
+
+Pendientes TC-02-079/080/081: cliente Mobile existente sobre Wi-Fi/LAN real sin Internet, interfaces/IP alcanzables y mediciones representativas de discovery. No se declara interoperabilidad del móvil ni se modifican los pendientes físicos de SPEC-01.
 
 ---
 
@@ -2783,11 +3303,36 @@ Sin eliminación automática V1.
 
 DEC-02-018
 Diagnósticos sin nueva dependencia de monitorización.
+
+DEC-02-019
+UDP Discovery auxiliar: laptop respondedor IPv4 0.0.0.0:4211; Mobile ya dispone del cliente.
+
+DEC-02-020
+Solicitud y respuesta literales UTF-8 exactas: BLANQUITA_VISION_DISCOVER y BLANQUITA_VISION_HERE:8765.
+Sin BOM, newline, terminador nulo, JSON ni campos adicionales.
+
+DEC-02-021
+Responder unicast desde UDP 4211 a la IP y puerto origen de la solicitud.
+Mobile obtiene la IP de laptop del origen de respuesta y abre ws://IP_LAPTOP:8765/vision.
+
+DEC-02-022
+UDP puede iniciar independientemente de WS, pero solo anuncia HERE con WS LISTENING o CLIENT_CONNECTED.
+No exigir cámara/detector/calibración activos ni ready de visión para discovery.
+
+DEC-02-023
+Fallo o detención aislada de discovery no detiene/reinicia WebSocket ni bloquea su arranque.
+Discovery Worker y diagnóstico tienen lifecycle propio.
+
+DEC-02-024
+UDP no transporta datos operativos ni acciones y no reserva clientes WS o vision_sessions.
+El cliente único y el handshake siguen perteneciendo a WebSocket.
 ```
 
 ---
 
 # Anexo B — Contrato JSON V1
+
+Este contrato corresponde exclusivamente a mensajes operativos WebSocket. UDP Discovery utiliza el anexo F, sin envelope JSON.
 
 ## B.1. Envelope
 
@@ -2864,6 +3409,8 @@ Los números son ejemplos de esquema, no mediciones reales ni precisión aprobad
 
 # Anexo C — Matriz de mensajes
 
+Matriz del canal WebSocket, no del respondedor UDP.
+
 | type | Dirección | Trigger | Persistencia |
 |---|---|---|---|
 | vision.hello | Laptop → Mobile | connect | evento |
@@ -2877,6 +3424,11 @@ Los números son ejemplos de esquema, no mediciones reales ni precisión aprobad
 | vision.start | Mobile → Laptop | control visión | evento |
 | vision.stop | Mobile → Laptop | control visión | evento |
 | vision.ping | Mobile → Laptop | health | no histórico obligatorio |
+
+| Datagramas UDP separados | Dirección | Trigger | Efecto |
+|---|---|---|---|
+| BLANQUITA_VISION_DISCOVER | Mobile → Laptop:4211 | búsqueda del cliente existente | validar solicitud; sin acción de visión |
+| BLANQUITA_VISION_HERE:8765 | Laptop:4211 → IP/puerto origen Mobile | solicitud válida y WS elegible | informar ubicación por IP origen; sin sesión/reserva |
 
 ---
 
@@ -2897,7 +3449,8 @@ src/blanquita_vision/
 │       ├── calibration_repository_port.py
 │       ├── capture_storage_port.py
 │       ├── settings_repository_port.py
-│       └── diagnostics_provider_port.py
+│       ├── diagnostics_provider_port.py
+│       └── discovery_responder_port.py
 ├── application/
 │   ├── report_mapper.py
 │   ├── network_controller.py
@@ -2907,7 +3460,8 @@ src/blanquita_vision/
 │   └── diagnostics_service.py
 ├── adapters/
 │   ├── network/
-│   │   └── websocket_vision_server.py
+│   │   ├── websocket_vision_server.py
+│   │   └── udp_discovery_responder.py
 │   └── storage/
 │       ├── sqlite_vision_repository.py
 │       ├── sqlite_calibration_repository.py
@@ -2924,14 +3478,30 @@ src/blanquita_vision/
     │   └── settings_screen.py
     └── workers/
         ├── network_worker.py
+        ├── discovery_worker.py
         └── storage_worker.py
 ```
 
 Orientativa; evitar clases redundantes.
 
+Los elementos UDP fueron implementados tras la autorización posterior del usuario; ver 28.5. El resto del árbol mantiene carácter orientativo.
+
 ---
 
 # Anexo E — Interoperabilidad Mobile
+
+El usuario confirma que Mobile ya dispone del cliente UDP. El contrato de compatibilidad añadido es:
+
+```text
+destino discovery = UDP 4211 de la laptop/LAN
+solicitud = BLANQUITA_VISION_DISCOVER
+respuesta = BLANQUITA_VISION_HERE:8765
+respuesta unicast = IP + puerto origen de solicitud
+IP_LAPTOP = dirección origen de respuesta
+conexión siguiente = ws://IP_LAPTOP:8765/vision
+```
+
+No se altera el cliente de discovery ni se prescribe su política de búsqueda/selección. Si no hay respuesta UDP, esto no demuestra por sí solo caída WS; una IP conocida sigue permitiendo intentar el WebSocket. Una respuesta puede localizar la laptop aun cuando la cámara esté desconectada, y no indica cliente activo ni ready operativo.
 
 Mobile deberá alinear su cliente con:
 
@@ -2966,6 +3536,41 @@ comandos crudos ESP32
 acceso filesystem
 acceso directo DB
 ```
+
+# Anexo F — Contrato UDP Discovery
+
+### F.1. Datagramas literales
+
+Solicitud enviada a UDP 4211:
+
+```text
+BLANQUITA_VISION_DISCOVER
+```
+
+Respuesta enviada desde UDP 4211 al origen:
+
+```text
+BLANQUITA_VISION_HERE:8765
+```
+
+Los bloques muestran el texto, no delimitadores: los caracteres de salto de línea usados para presentar Markdown no forman parte de los datagramas. Codificar exactamente esos textos en UTF-8; no envolver en JSON, añadir comillas, BOM, terminadores, IP o metadatos.
+
+### F.2. Condición y secuencia
+
+```text
+UDP LISTENING + solicitud exacta + WS LISTENING/CLIENT_CONNECTED
+   → respuesta literal unicast al origen
+
+UDP LISTENING + solicitud inválida o WS no elegible
+   → ninguna respuesta; ninguna acción
+
+Mobile recibe respuesta válida
+   → toma IP origen de respuesta
+   → abre ws://IP_LAPTOP:8765/vision
+   → hello/ready/status/heartbeat/report por WebSocket
+```
+
+La búsqueda puede llegar por broadcast; la respuesta de laptop es unicast. El servicio no inicia cámara/detector, no transporta percepción y no consume la plaza del cliente único WS. Send UDP no demuestra recepción: la interoperabilidad se verifica con TC-02-079/080.
 
 ---
 
@@ -3012,6 +3617,11 @@ acceso directo DB
 ✓ DoD
 ✓ riesgos
 ✓ trazabilidad
+✓ contrato UDP y retorno al origen definidos
+✓ separación discovery / WebSocket definida
+✓ inicio/fallo/cierre independientes definidos
+✓ estados, diagnóstico y riesgos discovery definidos
+✓ contrato y pruebas UDP verificados en software; Mobile/LAN reales pendientes
 ```
 
 ---
@@ -3022,6 +3632,7 @@ acceso directo DB
 SPEC-02
 Protocolo, WebSocket, persistencia, analítica, reportes y diagnósticos
 
+VERSIÓN: 1.1.0
 ESTADO: IMPLEMENTED
 
 DEPENDENCIAS:
@@ -3029,8 +3640,10 @@ SPEC-00 VALIDATED
 SPEC-01 APPROVED + implementación funcional validada en software
 
 SIGUIENTE PASO:
-Implementación entregada y validada en software (sección 28).
-Completar pruebas con Mobile/LAN reales y mediciones representativas.
+UDP Discovery entregado y validado en software (sección 28.5).
+Completar TC-02-079/080/081 con Mobile/LAN reales y mediciones.
+La evidencia histórica de 1.0.0 se conserva en sección 28.
+Completar también los pendientes de red/dispositivo y benchmarks previos.
 
 DESBLOQUEA TRAS IMPLEMENTACIÓN/VALIDACIÓN:
 SPEC-03 — IA/ONNX, testing, rendimiento,
@@ -3048,7 +3661,7 @@ El usuario aprobó SPEC-02 y las políticas siguientes antes de implementar:
 - Start en STARTING/RUNNING es idempotente; durante STOPPING responde busy. Reinicios internos conservan el origen de inicio.
 - Storage máximo 256 trabajos; hasta 192 ordinarios y 64 plazas reservadas a críticos. Detección por observación recibida; máximo dos capturas pendientes. Saturación y fallos se informan con estado/contadores, sin éxito ficticio ni descarte silencioso.
 - SQLite: espera de bloqueo 0,1 s; hasta tres intentos separados por 0,2 s.
-- Red: mensajes máximo 64 KiB, envío timeout tres segundos y cierre de cliente dos segundos. JSON/payload inválido informa error sin acción y mantiene conexión; protocolo/versión incompatibles o binario cierran conexión.
+- WebSocket: mensajes máximo 64 KiB, envío timeout tres segundos y cierre de cliente dos segundos. JSON/payload inválido informa error sin acción y mantiene conexión; protocolo/versión incompatibles o binario cierran conexión. Estos límites y respuestas de protocolo no se trasladan al discovery UDP literal.
 - CSV representa null con campo vacío; JSON conserva null.
 - Si el archivo de captura se escribe pero falla metadata, se conserva y se informa el fallo, sin borrado automático.
 - --data-dir selecciona la ruta de datos al arrancar. AJUSTES permite cambiar formato/ruta de capturas y muestra la ruta de DB.
@@ -3056,3 +3669,5 @@ El usuario aprobó SPEC-02 y las políticas siguientes antes de implementar:
 - Cierre: espera asíncrona de cinco segundos; si quedan operaciones activas, mantener ventana abierta con diagnóstico.
 
 Estos valores son límites iniciales de operación, no objetivos ni mediciones de benchmark.
+
+Para discovery rigen las decisiones adicionales DEC-02-019 a DEC-02-024 y el contrato del anexo F. No se fijan intervalos de búsqueda/reintento del móvil existente, anuncios periódicos de laptop ni objetivos numéricos de discovery.

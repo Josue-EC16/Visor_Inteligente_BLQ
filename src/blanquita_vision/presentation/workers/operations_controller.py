@@ -16,11 +16,14 @@ class QtOperationsController(QObject):
     def start(self) -> None:
         self.service.storage.start()
         self.service.network.start()
+        if self.service.discovery is not None:
+            self.service.discovery.start()
         self.timer.start()
 
     @property
     def active(self) -> bool:
-        return self.service.storage.active or self.service.network.active
+        return (self.service.storage.active or self.service.network.active
+                or self.service.discovery is not None and self.service.discovery.active)
 
     def shutdown(self) -> None:
         self.timer.stop()

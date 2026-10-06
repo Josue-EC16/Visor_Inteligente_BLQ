@@ -12,6 +12,7 @@ from ..domain.models.protocol import (
     StatusPayload, message, utc_text,
 )
 from ..domain.models.vision_observation import VisionPipelineState
+from ..domain.ports.discovery_responder_port import DiscoveryResponderPort
 from .report_mapper import millimeter_factor, report_from_observation
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,10 @@ class MetricAggregator:
 
 class OperationsService:
     def __init__(self, camera, vision, calibration, storage, network, calibration_repository,
-                 system_snapshot: dict | None = None) -> None:
+                 system_snapshot: dict | None = None, discovery: DiscoveryResponderPort | None = None) -> None:
         self.camera, self.vision, self.calibration = camera, vision, calibration
         self.storage, self.network = storage, network
+        self.discovery = discovery
         self.calibration_repository = calibration_repository
         self.system_snapshot = system_snapshot or {}
         self.session_id = None
@@ -347,6 +349,8 @@ class OperationsService:
         if self._closing:
             return
         self._closing = True
+        if self.discovery is not None:
+            self.discovery.stop()
         self.network.server.clear_pending_report()
         self.network.shutdown()
         self.drain_network_events()

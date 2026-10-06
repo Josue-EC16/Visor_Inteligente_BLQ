@@ -15,7 +15,7 @@ el alcance y seguimiento se registran al final del documento.
 **SPEC-01:** implementación funcional disponible y validación de software registrada;
 la SPEC permanece APPROVED mientras se completan tuning y pruebas con el gancho real.
 
-**SPEC-02:** IMPLEMENTED y validada en software. La interoperabilidad con Mobile
+**SPEC-02 1.1.0:** IMPLEMENTED, incluido UDP Discovery, y validada en software. La interoperabilidad con Mobile
 real y la operación por Wi-Fi/LAN real siguen pendientes de pruebas independientes.
 
 - Ventana maximizada, redimensionable, tema negro y sidebar de siete módulos.
@@ -249,9 +249,47 @@ Por defecto se crea `data/blanquita_vision.db`; las capturas se guardan en
 Si el puerto está ocupado, se informa en DIAGNÓSTICOS y la visión local puede
 seguir funcionando. No se cambia de puerto silenciosamente.
 
+### UDP Discovery — Localización automática por Mobile
+
+Al iniciar la aplicación se abre también el respondedor auxiliar UDP IPv4 en
+**`0.0.0.0:4211`**, mediante un worker/event loop independiente.
+
+El cliente UDP ya existente de Mobile envía a la laptop/LAN:
+
+```text
+BLANQUITA_VISION_DISCOVER
+```
+
+La laptop responde unicast a la **IP y puerto origen de esa solicitud**:
+
+```text
+BLANQUITA_VISION_HERE:8765
+```
+
+Ambos textos son UTF-8 exactos, sin BOM, espacios añadidos, newline, terminador
+nulo ni envelope JSON. Mobile toma la IP de origen del datagrama de respuesta y
+abre `ws://IP_LAPTOP:8765/vision`; 8765 es el puerto WebSocket, no el destino UDP
+del móvil. El retorno funciona también cuando el cliente usa un puerto efímero.
+
+HERE se responde solo cuando WebSocket está LISTENING o CLIENT_CONNECTED. No
+requiere cámara ni detector activos y no equivale a ready operativo o cliente
+WS conectado. UDP no transporta VisionReport, estados, heartbeat ni comandos.
+
+En **DIAGNÓSTICOS → NETWORK → UDP DISCOVERY** se muestran estado, bind/puerto,
+elegibilidad, contadores de solicitudes/respuestas/errores y último error.
+Si UDP 4211 está ocupado o falla discovery, WebSocket sigue arrancando/funcionando;
+se puede conectar por una IP conocida. Un reset de peer UDP en Windows se registra
+sin reenviar ni derribar el socket sano. Cerrar la app cancela y libera el worker
+UDP, sin terminar forzosamente hilos. No hay anuncios periódicos ni reintentos
+de búsqueda originados por la laptop.
+
+Laptop y Mobile deben estar en la misma LAN. El broadcast/retorno unicast requieren
+que la red y el firewall permitan UDP 4211; WebSocket usa TCP 8765. La validación
+real de discovery con el móvil y las interfaces Wi-Fi/Ethernet todavía está pendiente.
+
 ### Contrato Laptop ↔ Mobile
 
-Todos los mensajes requieren `protocol`, `version`, `type`, `messageId`,
+Los mensajes operativos WebSocket requieren `protocol`, `version`, `type`, `messageId`,
 `timestamp` y `payload`. UUID válido, versión entera 1, JSON estricto sin campos
 adicionales, valores finitos y timestamps con zona horaria. La serialización es
 UTC ISO-8601 con sufijo Z. La presentación de tablas/diagnósticos usa hora local;
@@ -336,6 +374,7 @@ informa el fallo; no se declara captura completamente exitosa.
   conserva null; CSV usa campo vacío. Columnas de exportación estables en inglés,
   timestamps UTC y coordenadas mm.
 - **DIAGNÓSTICOS:** CAMERA, VISION, NETWORK, DATABASE, FILESYSTEM y SYSTEM.
+  NETWORK incluye el subcomponente UDP DISCOVERY separado del servidor WS.
   Muestra estado real, RX/TX, WAL, schema, cola y errores. CPU/RAM/GPU detallados
   aparecen como No disponible. La writability mostrada es la información de
   permisos disponible; guardar una captura verifica la escritura real.
@@ -352,17 +391,25 @@ informa el fallo; no se declara captura completamente exitosa.
   JSON/payload inválido no ejecuta acciones; incompatibilidad de protocolo/versión
   o binario cierra conexión.
 - Ausencia de Mobile o storage degradado no detiene por sí sola la percepción.
+- UDP Discovery usa solo los dos datagramas literales; sus errores no detienen WS,
+  cámara, pipeline o storage. Datos inválidos se ignoran sin responder comandos.
 - Cierre: bloquea acciones nuevas, cierra red, termina sesión y drena storage.
   Tras cinco segundos con operaciones activas mantiene la ventana con diagnóstico;
   no termina forzosamente hilos.
 
 ### Verificación y benchmarks
 
-Última suite completa: **161 passed, 1 skipped**. Verifica contrato/Pydantic,
+Última suite completa de revisión 1.1.0: **191 passed, 1 skipped**. Verifica contrato/Pydantic,
 WebSocket loopback, heartbeat, cliente único, comandos idempotentes, latest-only,
 SQLite, archivos reales JPG/PNG, exportaciones, UI, saturación, DB locked/unavailable,
 fallo de metadata y cancelación de cargas tardías, además de regresiones previas.
 La omisión sigue siendo la prueba opcional de cámara física de SPEC-00.
+
+Pruebas UDP específicas: **30 passed**. Incluyen datagramas reales loopback,
+texto exacto y puerto origen, entrada inválida/oversized, elegibilidad WS, respuesta
+sin cámara/detector, fallos de bind/recepción/envío, independencia WS/ping/heartbeat,
+cancelación/rebind y diagnóstico/concurrencia Qt. El flujo discovery → WS pasó
+con UDP 4211 y TCP 8765; ese caso se omite si otra instancia ocupa dichos puertos.
 
 Benchmarks reproducibles con datos sintéticos (los números de ejemplo son parámetros
 de ejecución, no objetivos aprobados):
@@ -381,6 +428,9 @@ latencias/FPS y crecimiento en operación real siguen pendientes de medición.
 interoperabilidad con Mobile real y detección de stale. Mobile debe alinear sus
 modelos/UI con X/Y, Z=null, mm y UTC de SPEC-02; el documento móvil antiguo mostraba X/Z.
 La validación física de SPEC-01 y la limitación USB aceptada de SPEC-00 no cambian.
+Para UDP quedan pendientes TC-02-079/080/081: discovery con Mobile existente en
+LAN real sin Internet, interfaces/dirección alcanzable y mediciones representativas.
+Los resultados de loopback no se presentan como pruebas con el dispositivo real.
 
 ### Fallos y cierre
 
